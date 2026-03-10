@@ -1,0 +1,41 @@
+name: Sync CVE Data
+
+on:
+  schedule:
+    - cron: '0 0,6,12,18 * * *'
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Days of CVE history to fetch'
+        required: false
+        default: '90'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Fetch CVEs from NVD
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '90' }}
+        run: python .github/scripts/sync_cves.py
+
+      - name: Commit CVE data
+        run: |
+          git config user.name "SecureWatch Bot"
+          git config user.email "actions@github.com"
+          git add cve-data.json
+          git diff --staged --quiet || git commit -m "chore: sync CVE data $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push
