@@ -1872,7 +1872,7 @@ function isRecent14(ds){return ds&&new Date(ds)>=daysAgo(14);}
    Office use:    set USE_WORKER = false (direct NVD, auto-retry)
 ─────────────────────────────────────────────────────────────── */
 const USE_GITHUB   = true;                     // ← true = use GitHub Actions cached data (recommended)
-const GITHUB_DATA  = 'https://raw.githubusercontent.com/mosycity/SecureWatch/main/cve-data.json';
+const GITHUB_DATA  = 'https://raw.githubusercontent.com/Mosycity/SecureWatchGH/main/cve-data.json';
 const USE_BACKEND  = false;                    // ← true = use local Python server on office PC
 const BACKEND_URL  = 'http://localhost:3000';  // ← change to your office PC's IP address
 const USE_WORKER   = false;                    // ← true = Cloudflare worker proxy
