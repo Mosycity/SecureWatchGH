@@ -4057,34 +4057,89 @@ function closeApiKeyModal() {
   const m = document.getElementById('apikeyModal');
   if (m) { m.classList.remove('open'); document.body.style.overflow = ''; }
 }
+<script>
 
 /* ── Info Modal ── */
 function openInfoModal(){
   const m=document.getElementById('infoModal');
-  if(m){m.classList.add('open');document.body.style.overflow='hidden';}
+  if(m){
+    m.classList.add('open');
+    document.body.style.overflow='hidden';
+  }
 }
+
 function closeInfoModal(){
   const m=document.getElementById('infoModal');
-  if(m){m.classList.remove('open');document.body.style.overflow='';}
+  if(m){
+    m.classList.remove('open');
+    document.body.style.overflow='';
+  }
 }
-// Close on Escape key
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeInfoModal();});
 
+/* Close modal with ESC */
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    closeInfoModal();
+  }
+});
+
+/* ── Init App ── */
 function init(){
-  localDeployed=loadDeployed();
-  updateApiKeyUI(); // show key status in header button on load
-  renderVendorArea();reRenderAll();loadKEV();loadAll();fetchTicker();loadNewsFeed();
-  const bt=document.getElementById('infoBannerText');
-  if(bt) bt.textContent=USE_GITHUB
-    ? 'CVE data: GitHub Actions cache (syncs every 6h from NVD). KEV: CISA direct. Instant loading.'
-    : USE_BACKEND
-      ? 'CVE data: Office backend server (instant local cache, syncs daily from NVD). KEV: CISA direct.'
-      : USE_WORKER
-        ? 'CVE data: NVD via Worker proxy (keyword + CPE, paginated). KEV: CISA direct. Sorted by severity.'
-        : 'CVE data: Direct NVD (keyword + CPE search, paginated). KEV: CISA direct. Sorted by severity.';
+
+  try{
+    localDeployed = loadDeployed();
+  }catch(e){console.warn(e);}
+
+  try{
+    updateApiKeyUI();
+  }catch(e){}
+
+  try{
+    renderVendorArea();
+    reRenderAll();
+  }catch(e){}
+
+  try{
+    loadKEV();
+  }catch(e){}
+
+  try{
+    loadAll();
+  }catch(e){}
+
+  try{
+    fetchTicker();
+  }catch(e){}
+
+  try{
+    loadNewsFeed();
+  }catch(e){}
+
+  const bt=document.getElementById("infoBannerText");
+
+  if(bt){
+    if(typeof USE_GITHUB!=="undefined" && USE_GITHUB){
+      bt.textContent="CVE data: GitHub Actions cache (syncs every 6h from NVD). KEV: CISA direct.";
+    }
+    else if(typeof USE_BACKEND!=="undefined" && USE_BACKEND){
+      bt.textContent="CVE data: Office backend cache (daily sync from NVD). KEV: CISA direct.";
+    }
+    else if(typeof USE_WORKER!=="undefined" && USE_WORKER){
+      bt.textContent="CVE data: NVD via Worker proxy. KEV: CISA direct.";
+    }
+    else{
+      bt.textContent="CVE data: Direct NVD API query. KEV: CISA direct.";
+    }
+  }
+
 }
-init();
+
+/* Start app */
+document.addEventListener("DOMContentLoaded",init);
+
 </script>
+
+
 <!-- ══ FOOTER ══ -->
 <footer class="site-footer">
   <div class="footer-inner">
