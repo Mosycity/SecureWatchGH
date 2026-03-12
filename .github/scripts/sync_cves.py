@@ -67,9 +67,9 @@ VENDOR_FEEDS = [
         'id':     'cisco',
         'name':   'Cisco PSIRT',
         'urls':   [
-            'https://sec.cloudapps.cisco.com/security/center/rss/psirt.xml',
+            'https://sec.cloudapps.cisco.com/security/center/psirt/rss/psirtAll.xml',
+            'https://sec.cloudapps.cisco.com/security/center/psirt/rss/psirtCritical.xml',
             'https://tools.cisco.com/security/center/psirtrss20.xml',
-            'https://sec.cloudapps.cisco.com/security/center/psirtrss20.xml',
         ],
         'format': 'rss',
     },
@@ -104,10 +104,10 @@ VENDOR_FEEDS = [
         'name':   'Juniper SIRT',
         'urls':   [
             'https://kb.juniper.net/InfoCenter/index?page=rss&channel=SIRT',
-            'https://www.juniper.net/us/en/local/xml/rss/news/security-advisories.xml',
+            'https://www.juniper.net/us/en/rss/security-advisories.xml',
             'https://supportportal.juniper.net/s/rss/5AB30000000CnYuOAK',
         ],
-        'format': 'rss',
+        'format': 'rss_lenient',  # use html.parser for malformed XML
     },
 ]
 
@@ -282,16 +282,30 @@ def severity_from_title(title):
         return 'LOW'
     return 'HIGH'  # default assumption for vendor advisories
 
+def parse_xml_lenient(raw):
+    """Try strict XML first, fall back to cleaning malformed XML."""
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError:
+        # Decode and strip control chars that break XML parsing
+        clean = raw.decode('utf-8', errors='replace')
+        clean = ''.join(c for c in clean if ord(c) >= 32 or c in '\t\n\r')
+        # Fix bare & not part of a proper XML entity
+        clean = re.sub(r'&(?![a-zA-Z#][a-zA-Z0-9#]*;)', '&amp;', clean)
+        return ET.fromstring(clean.encode('utf-8'))
+
+
 def fetch_rss_feed(feed):
     """Parse an RSS/Atom feed and return list of advisory dicts."""
     vendor_id = feed['id']
     cutoff    = (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime('%Y-%m-%d')
     advisories = []
+    lenient   = feed.get('format') == 'rss_lenient'
 
     try:
         urls = feed.get('urls', [feed.get('url','')])
         raw = http_get_with_fallback(urls, timeout=15)
-        root = ET.fromstring(raw)
+        root = parse_xml_lenient(raw) if lenient else ET.fromstring(raw)
 
         # Handle both RSS and Atom namespaces
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
