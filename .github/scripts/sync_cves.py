@@ -67,11 +67,9 @@ VENDOR_FEEDS = [
         'id':     'cisco',
         'name':   'Cisco PSIRT',
         'urls':   [
-            'https://sec.cloudapps.cisco.com/security/center/psirt/rss/psirtAll.xml',
-            'https://sec.cloudapps.cisco.com/security/center/psirt/rss/psirtCritical.xml',
-            'https://tools.cisco.com/security/center/psirtrss20.xml',
+            'https://sec.cloudapps.cisco.com/security/center/json/getProductAdvisories.x?advisoryType=Security%20Advisory&sortBy=firstPublished&output=json',
         ],
-        'format': 'rss',
+        'format': 'cisco_json',
     },
     {
         'id':     'microsoft',
@@ -284,6 +282,7 @@ def severity_from_title(title):
 
 def parse_xml_lenient(raw):
     """Try strict XML first, fall back to cleaning malformed XML."""
+    import re as _rexml
     try:
         return ET.fromstring(raw)
     except ET.ParseError:
@@ -291,7 +290,7 @@ def parse_xml_lenient(raw):
         clean = raw.decode('utf-8', errors='replace')
         clean = ''.join(c for c in clean if ord(c) >= 32 or c in '\t\n\r')
         # Fix bare & not part of a proper XML entity
-        clean = re.sub(r'&(?![a-zA-Z#][a-zA-Z0-9#]*;)', '&amp;', clean)
+        clean = _rexml.sub(r'&(?![a-zA-Z#][a-zA-Z0-9#]*;)', '&amp;', clean)
         return ET.fromstring(clean.encode('utf-8'))
 
 
@@ -363,6 +362,49 @@ def fetch_rss_feed(feed):
 
     except Exception as e:
         log(f"  ⚠️  RSS  {vendor_id}: {e} — skipping vendor feed")
+        return []
+
+def fetch_cisco_feed(feed):
+    """Fetch Cisco PSIRT advisories via their public JSON API."""
+    import re as _recisco
+    vendor_id = feed['id']
+    cutoff    = (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime('%Y-%m-%d')
+    advisories = []
+    try:
+        urls = feed.get('urls', [])
+        raw  = http_get_with_fallback(urls, timeout=20)
+        data = json.loads(raw)
+        items = data if isinstance(data, list) else data.get('advisories', data.get('data', []))
+        for item in items:
+            pub = (item.get('firstPublished') or item.get('publicationUrl',''))[:10]
+            if pub and pub < cutoff:
+                continue
+            title   = item.get('advisoryTitle','') or item.get('title','')
+            url     = item.get('publicationUrl','') or item.get('url','')
+            desc    = item.get('summary','') or item.get('description','')
+            cve_ids = item.get('cves', item.get('cveIds', []))
+            # Also extract from text
+            if not cve_ids:
+                cve_ids = _recisco.findall(r'CVE-\d{4}-\d{4,7}', f"{title} {desc}")
+            sev = (item.get('sir','') or item.get('severity','')).upper()
+            if sev not in ('CRITICAL','HIGH','MEDIUM','LOW'):
+                sev = severity_from_title(title)
+            if cve_ids:
+                for cid in (cve_ids if isinstance(cve_ids, list) else [cve_ids]):
+                    advisories.append({
+                        'cve_id': str(cid).upper(), 'title': title,
+                        'desc': desc[:500], 'url': url,
+                        'published': pub, 'severity': sev, 'vendor_id': vendor_id,
+                    })
+            else:
+                advisories.append({
+                    'cve_id': None, 'title': title, 'desc': desc[:500],
+                    'url': url, 'published': pub, 'severity': sev, 'vendor_id': vendor_id,
+                })
+        log(f"  ✅ JSON {vendor_id:15} {len(advisories):4} advisories ({len([a for a in advisories if a['cve_id']])} with CVE IDs)")
+        return advisories
+    except Exception as e:
+        log(f"  ⚠️  JSON {vendor_id}: {e} — skipping vendor feed")
         return []
 
 def fetch_msrc_feed(feed):
@@ -484,6 +526,8 @@ def main():
         log(f"  Fetching {feed['name']}…")
         if feed['format'] == 'msrc':
             advisories = fetch_msrc_feed(feed)
+        elif feed['format'] == 'cisco_json':
+            advisories = fetch_cisco_feed(feed)
         else:
             advisories = fetch_rss_feed(feed)
         vendor_advisories[feed['id']] = advisories
