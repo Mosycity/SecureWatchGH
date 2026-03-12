@@ -66,31 +66,47 @@ VENDOR_FEEDS = [
     {
         'id':     'cisco',
         'name':   'Cisco PSIRT',
-        'url':    'https://sec.cloudapps.cisco.com/security/center/psirtrss20.xml',
+        'urls':   [
+            'https://sec.cloudapps.cisco.com/security/center/rss/psirt.xml',
+            'https://tools.cisco.com/security/center/psirtrss20.xml',
+            'https://sec.cloudapps.cisco.com/security/center/psirtrss20.xml',
+        ],
         'format': 'rss',
     },
     {
         'id':     'microsoft',
         'name':   'Microsoft MSRC',
-        'url':    'https://api.msrc.microsoft.com/cvrf/v3.0/updates',
+        'urls':   [
+            'https://api.msrc.microsoft.com/cvrf/v3.0/updates',
+        ],
         'format': 'msrc',
     },
     {
         'id':     'fortinet',
         'name':   'Fortinet PSIRT',
-        'url':    'https://www.fortiguard.com/rss/psirt.xml',
+        'urls':   [
+            'https://www.fortiguard.com/rss/ir.xml',
+            'https://filestore.fortinet.com/fortiguard/rss/ir.xml',
+            'https://www.fortiguard.com/rss/psirt.xml',
+        ],
         'format': 'rss',
     },
     {
         'id':     'paloalto',
         'name':   'Palo Alto Security',
-        'url':    'https://security.paloaltonetworks.com/rss.xml',
+        'urls':   [
+            'https://security.paloaltonetworks.com/rss.xml',
+        ],
         'format': 'rss',
     },
     {
         'id':     'juniper',
         'name':   'Juniper SIRT',
-        'url':    'https://supportportal.juniper.net/s/rss/5AB30000000CnYuOAK',
+        'urls':   [
+            'https://kb.juniper.net/InfoCenter/index?page=rss&channel=SIRT',
+            'https://www.juniper.net/us/en/local/xml/rss/news/security-advisories.xml',
+            'https://supportportal.juniper.net/s/rss/5AB30000000CnYuOAK',
+        ],
         'format': 'rss',
     },
 ]
@@ -107,6 +123,17 @@ def http_get(url, headers=None, timeout=20):
     })
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+def http_get_with_fallback(urls, headers=None, timeout=15):
+    """Try each URL in list, return first success."""
+    last_err = None
+    for url in urls:
+        try:
+            return http_get(url, headers=headers, timeout=timeout)
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err
 
 # ── NVD fetch ─────────────────────────────────────────────────
 def nvd_fetch(params, attempt=0):
@@ -262,7 +289,8 @@ def fetch_rss_feed(feed):
     advisories = []
 
     try:
-        raw = http_get(feed['url'], timeout=20)
+        urls = feed.get('urls', [feed.get('url','')])
+        raw = http_get_with_fallback(urls, timeout=15)
         root = ET.fromstring(raw)
 
         # Handle both RSS and Atom namespaces
@@ -330,7 +358,8 @@ def fetch_msrc_feed(feed):
     advisories = []
 
     try:
-        raw  = http_get(feed['url'], headers={'Accept': 'application/json'}, timeout=20)
+        urls = feed.get('urls', [feed.get('url','')])
+        raw  = http_get_with_fallback(urls, headers={'Accept': 'application/json'}, timeout=20)
         data = json.loads(raw)
         updates = data.get('value', [])
 
