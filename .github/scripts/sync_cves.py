@@ -101,11 +101,11 @@ VENDOR_FEEDS = [
         'id':     'juniper',
         'name':   'Juniper SIRT',
         'urls':   [
+            'https://www.juniper.net/us/en/local/xml/rss/juniper-security-advisories.xml',
+            'https://kb.juniper.net/InfoCenter/index?page=rss&channel=PSIRT',
             'https://kb.juniper.net/InfoCenter/index?page=rss&channel=SIRT',
-            'https://www.juniper.net/us/en/rss/security-advisories.xml',
-            'https://supportportal.juniper.net/s/rss/5AB30000000CnYuOAK',
         ],
-        'format': 'rss_lenient',  # use html.parser for malformed XML
+        'format': 'rss_lenient'
     },
 ]
 
@@ -283,6 +283,10 @@ def severity_from_title(title):
 def parse_xml_lenient(raw):
     """Try strict XML first, fall back to cleaning malformed XML."""
     import re as _rexml
+    # Detect HTML login redirect — not a real XML feed
+    preview = raw[:300].lower()
+    if b'<html' in preview or b'<!doctype' in preview:
+        raise ValueError("Got HTML instead of XML — feed requires login")
     try:
         return ET.fromstring(raw)
     except ET.ParseError:
@@ -447,6 +451,86 @@ def fetch_msrc_feed(feed):
         return []
 
 # ── Merge vendor advisories into NVD CVE list ─────────────────
+
+# ─────────────────────────────────────────────────────────────
+# CISA KEV + Advisories
+# ─────────────────────────────────────────────────────────────
+CISA_KEV_URL       = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
+CISA_ADVISORY_URL  = 'https://www.cisa.gov/cybersecurity-advisories/all.xml'
+
+def fetch_cisa_kev():
+    """Fetch CISA Known Exploited Vulnerabilities catalog.
+    Returns dict: { 'CVE-XXXX-YYYY': { kev fields } }
+    """
+    log("  Fetching CISA KEV catalog...")
+    try:
+        raw  = http_get(CISA_KEV_URL, timeout=30)
+        data = json.loads(raw)
+        vulns = data.get('vulnerabilities', [])
+        kev = {}
+        for v in vulns:
+            cid = v.get('cveID','').upper()
+            if not cid:
+                continue
+            kev[cid] = {
+                'kev':           True,
+                'kevDueDate':    v.get('dueDate',''),
+                'kevDateAdded':  v.get('dateAdded',''),
+                'kevRansomware': v.get('knownRansomwareCampaignUse','Unknown') == 'Known',
+                'kevProduct':    (v.get('vendorProject','') + ' ' + v.get('product','')).strip(),
+                'kevAction':     v.get('requiredAction',''),
+                'kevName':       v.get('vulnerabilityName',''),
+            }
+        log(f"  KEV {len(kev):5} entries loaded")
+        return kev
+    except Exception as e:
+        log(f"  WARNING CISA KEV: {e} -- skipping")
+        return {}
+
+def fetch_cisa_advisories():
+    """Fetch CISA Cybersecurity Advisories RSS. Returns list for past DAYS_BACK days."""
+    import re as _recisa
+    from email.utils import parsedate_to_datetime
+    log("  Fetching CISA Advisories RSS...")
+    cutoff = (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime('%Y-%m-%d')
+    advisories = []
+    try:
+        raw  = http_get(CISA_ADVISORY_URL, timeout=20)
+        root = ET.fromstring(raw)
+        channel = root.find('channel') or root
+        for item in channel.findall('item'):
+            title   = (item.findtext('title') or '').strip()
+            link    = (item.findtext('link')  or '').strip()
+            pubdate = (item.findtext('pubDate') or '').strip()
+            desc    = (item.findtext('description') or '').strip()
+            pub_iso = ''
+            try:
+                pub_iso = parsedate_to_datetime(pubdate).strftime('%Y-%m-%d')
+            except Exception:
+                pub_iso = pubdate[:10]
+            if pub_iso and pub_iso < cutoff:
+                continue
+            cve_ids = list(set(_recisa.findall(r'CVE-[0-9]{4}-[0-9]{4,7}', title + ' ' + desc)))
+            tl = title.lower()
+            if 'ransomware' in tl:                           adv_type = 'ransomware'
+            elif 'ics' in tl or 'scada' in tl:              adv_type = 'ics'
+            elif 'apt' in tl or 'nation' in tl:             adv_type = 'apt'
+            elif 'alert' in tl:                             adv_type = 'alert'
+            else:                                           adv_type = 'advisory'
+            advisories.append({
+                'title':   title,
+                'link':    link,
+                'pubDate': pub_iso,
+                'desc':    desc[:400],
+                'cveRefs': cve_ids,
+                'type':    adv_type,
+            })
+        log(f"  CISA Advisories {len(advisories):4} in last {DAYS_BACK}d")
+        return advisories
+    except Exception as e:
+        log(f"  WARNING CISA Advisories: {e} -- skipping")
+        return []
+
 def merge_advisories(nvd_cves, advisories, vendor_id):
     """
     - For CVEs already in NVD list: enrich with vendor advisory URL + title
@@ -500,6 +584,192 @@ def merge_advisories(nvd_cves, advisories, vendor_id):
     return list(nvd_map.values()), enriched, added_new
 
 # ── Main ──────────────────────────────────────────────────────
+
+def fetch_cisa_data(existing_cve_map):
+    """Fetch all CISA data: KEV catalog + CSAF advisories. Enrich with NVD data."""
+    kev_map    = fetch_cisa_kev()
+    advisories = fetch_cisa_advisories()
+
+    # Build flat CVE lookup from all advisories
+    cisa_cve_map = {}
+    for adv in advisories:
+        for c in adv['cves']:
+            cid = c['cveID']
+            if cid not in cisa_cve_map or (c['score'] or 0) > (cisa_cve_map[cid].get('score') or 0):
+                cisa_cve_map[cid] = {
+                    'score':    c['score'],
+                    'severity': c['severity'],
+                    'vector':   c['vector'],
+                    'action':   c['action'],
+                    'advID':    adv['id'],
+                    'advTitle': adv['title'],
+                    'advLink':  adv['link'],
+                    'advType':  adv['type'],
+                    'advDate':  adv['date'],
+                }
+
+    # Enrich KEV entries with NVD CVSS scores (KEV JSON has no scores)
+    kev_enriched = 0
+    for cve_id, kev in kev_map.items():
+        nvd = existing_cve_map.get(cve_id, {})
+        kev['cvss']     = nvd.get('score')
+        kev['severity'] = nvd.get('severity', '')
+        kev['vector']   = nvd.get('vector', '')
+        kev['epss']     = nvd.get('epss')
+        if cve_id in cisa_cve_map:
+            kev['cisaAdv'] = cisa_cve_map[cve_id]
+        if nvd:
+            kev_enriched += 1
+
+    cisa_in_env = sum(1 for c in cisa_cve_map if c in existing_cve_map)
+    log(f"  🔗 KEV enriched with NVD: {kev_enriched}/{len(kev_map)}")
+    log(f"  🏢 CISA advisory CVEs in your vendors: {cisa_in_env}")
+
+    cutoff30   = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
+    recent_kev = [v for v in kev_map.values() if v.get('kevDateAdded','') >= cutoff30]
+
+    return {
+        'lastFetch':      datetime.utcnow().isoformat() + 'Z',
+        'kevCount':       len(kev_map),
+        'recentKevCount': len(recent_kev),
+        'advisoryCount':  len(advisories),
+        'cisaCveCount':   len(cisa_cve_map),
+        'kev':            kev_map,
+        'advisories':     advisories,
+        'cisaCveMap':     cisa_cve_map,
+    }
+
+
+# ── News Sources ──────────────────────────────────────────────
+NEWS_SOURCES = [
+    {'id': 'bc',   'label': 'BleepingComputer', 'url': 'https://www.bleepingcomputer.com/feed/'},
+    {'id': 'thn',  'label': 'The Hacker News',  'url': 'https://feeds.feedburner.com/TheHackersNews'},
+    {'id': 'sw',   'label': 'SecurityWeek',     'url': 'https://feeds.feedburner.com/securityweek'},
+    {'id': 'cisa', 'label': 'CISA',             'url': 'https://www.cisa.gov/cybersecurity-advisories/all.xml'},
+    {'id': 'kos',  'label': 'Krebs on Security','url': 'https://krebsonsecurity.com/feed/'},
+]
+
+NEWS_KEYWORDS = {
+    'zero-day':   ['zero-day','zero day','0-day','zeroday'],
+    'ransomware': ['ransomware','ransom','lockbit','blackcat','clop','akira'],
+    'exploit':    ['exploit','proof-of-concept','remote code','rce'],
+    'breach':     ['breach','data leak','exposed','stolen','compromised'],
+    'critical':   ['critical','emergency','urgent','patch now','actively exploited'],
+}
+
+def parse_news_date(date_str):
+    if not date_str:
+        return datetime.utcnow().isoformat() + 'Z'
+    for fmt in ['%a, %d %b %Y %H:%M:%S %z','%a, %d %b %Y %H:%M:%S %Z',
+                '%Y-%m-%dT%H:%M:%SZ','%Y-%m-%dT%H:%M:%S%z']:
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime('%Y-%m-%dT%H:%M:%SZ')
+        except Exception:
+            pass
+    return datetime.utcnow().isoformat() + 'Z'
+
+def strip_html(text):
+    import re as _re
+    return _re.sub(r'<[^>]+>', '', text or '').strip()
+
+def get_news_tags(text):
+    t = text.lower()
+    return [tag for tag, kws in NEWS_KEYWORDS.items() if any(k in t for k in kws)]
+
+def fetch_news_feed(source):
+    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    items  = []
+    try:
+        raw  = http_get(source['url'], timeout=15)
+        root = ET.fromstring(raw)
+        nodes = root.findall('.//item') or root.findall('.//{http://www.w3.org/2005/Atom}entry')
+        for node in nodes[:20]:
+            def txt(tag, n=node):
+                el = n.find(tag)
+                return (el.text or '').strip() if el is not None else ''
+            title   = txt('title')
+            link    = txt('link') or txt('guid')
+            desc    = strip_html(txt('description') or txt('summary') or '')[:300]
+            pub     = parse_news_date(txt('pubDate') or txt('published') or txt('updated'))
+            if pub[:10] < cutoff[:10]:
+                continue
+            items.append({'id':source['id'],'src':source['label'],'title':title,
+                          'url':link,'desc':desc,'pub':pub,'tags':get_news_tags(f"{title} {desc}")})
+        log(f"  ✅ News  {source['id']:8} {len(items):3} articles")
+    except Exception as e:
+        log(f"  ⚠️  News  {source['id']}: {e}")
+    return items
+
+def fetch_all_news():
+    log('')
+    log('── Step 3: Security News ───────────────────────────────')
+    all_items, seen = [], set()
+    for source in NEWS_SOURCES:
+        for item in fetch_news_feed(source):
+            key = item['title'].lower()[:60]
+            if key not in seen:
+                seen.add(key)
+                all_items.append(item)
+        time.sleep(0.5)
+    all_items.sort(key=lambda x: x['pub'], reverse=True)
+    log(f"  📰 Total: {len(all_items)} articles from {len(NEWS_SOURCES)} sources")
+    return all_items
+
+
+# ── CISA KEV + Advisories ────────────────────────────────────
+CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
+
+def fetch_cisa_kev():
+    """Fetch CISA Known Exploited Vulnerabilities catalog."""
+    log('')
+    log('── Step 4: CISA KEV Catalog ────────────────────────────')
+    try:
+        raw  = http_get(CISA_KEV_URL, timeout=30)
+        data = json.loads(raw)
+        vulns = data.get('vulnerabilities', [])
+
+        # Build lookup dict: cveID -> enriched KEV data
+        kev = {}
+        ransomware_count = 0
+        for v in vulns:
+            cve_id = v.get('cveID','').upper()
+            if not cve_id:
+                continue
+            is_ransomware = str(v.get('knownRansomwareCampaignUse','')).lower() == 'known'
+            if is_ransomware:
+                ransomware_count += 1
+            kev[cve_id] = {
+                'vendor':     v.get('vendorProject',''),
+                'product':    v.get('product',''),
+                'name':       v.get('vulnerabilityName',''),
+                'dateAdded':  v.get('dateAdded',''),
+                'dueDate':    v.get('dueDate',''),
+                'action':     v.get('requiredAction',''),
+                'desc':       v.get('shortDescription',''),
+                'ransomware': is_ransomware,
+                'notes':      v.get('notes',''),
+                'cwes':       v.get('cwes',''),
+            }
+
+        log(f"  ✅ KEV catalog: {len(kev)} entries ({ransomware_count} ransomware-linked)")
+        return kev
+
+    except Exception as e:
+        log(f"  ⚠️  KEV fetch failed: {e}")
+        return {}
+
+def enrich_cves_with_kev(db, kev):
+    """Stamp _kev data onto any matching CVE in all vendor lists."""
+    enriched = 0
+    for vendor_id, vendor_data in db.get('vendors', {}).items():
+        for cve in vendor_data.get('cves', []):
+            cid = cve.get('id','').upper()
+            if cid in kev:
+                cve['_kev'] = kev[cid]
+                enriched += 1
+    log(f"  ✅ KEV enrichment: {enriched} CVEs enriched across all vendors")
+    return enriched
+
 def main():
     log('=' * 60)
     log('SecureWatch CVE Sync — NVD + Vendor Feeds')
@@ -516,6 +786,12 @@ def main():
             log(f'Loaded existing: {sum(len(v.get("cves",[])) for v in db["vendors"].values()):,} CVEs')
         except Exception:
             pass
+
+    # ── Step 0: CISA KEV + Advisories ────────────────────────
+    log('')
+    log('── Step 0: CISA KEV + Advisories ──────────────────────')
+    kev_map       = fetch_cisa_kev()          # { CVE-ID: kev fields }
+    cisa_advisories = fetch_cisa_advisories() # [ advisory dicts ]
 
     # ── Step 1: Fetch all vendor RSS/API feeds first (fast, no rate limits) ──
     log('')
@@ -572,6 +848,27 @@ def main():
         if i < len(VENDORS) - 1:
             time.sleep(THROTTLE)
 
+    # ── Step 3: CISA KEV + Advisories ────────────────────────
+    cve_map = {}
+    for vid, vdata in db.get('vendors', {}).items():
+        for cve in vdata.get('cves', []):
+            cid = cve.get('id','').upper()
+            if cid:
+                cve_map[cid] = cve
+    log(f"  CVE lookup map: {len(cve_map):,} entries")
+    cisa_data = fetch_cisa_data(cve_map)
+    db['cisa'] = cisa_data
+    if db['cisa'].get('kev'):
+        enrich_cves_with_kev(db, db['cisa']['kev'])
+    with open(OUT_FILE, 'w') as f:
+        json.dump(db, f, separators=(',', ':'))
+
+    # ── Step 4: Security news ─────────────────────────────────
+    news_items = fetch_all_news()
+    db['news'] = {'lastFetch': datetime.utcnow().isoformat()+'Z', 'items': news_items}
+    with open(OUT_FILE, 'w') as f:
+        json.dump(db, f, separators=(',', ':'))
+
     total = sum(len(v.get('cves',[])) for v in db['vendors'].values())
     size  = os.path.getsize(OUT_FILE) / 1024 / 1024
 
@@ -579,7 +876,11 @@ def main():
     log('=' * 60)
     log(f'Done: {success} vendors OK · {failed} skipped')
     log(f'Total CVEs: {total:,}  |  File: {size:.1f} MB')
-    log(f'Vendor feed enrichments: {total_enriched} enriched · {total_new} new CVEs added before NVD')
+    log(f'News articles: {len(news_items)} from {len(NEWS_SOURCES)} sources')
+    kev_count = len(db.get('cisa', {}).get('kev', {}))
+    adv_count = len(db.get('cisa', {}).get('advisories', []))
+    log(f'CISA KEV: {kev_count:,} entries | Advisories: {adv_count}')
+    log(f'Vendor enrichments: {total_enriched} enriched · {total_new} new CVEs from vendor feeds')
     log('=' * 60)
 
 if __name__ == '__main__':
