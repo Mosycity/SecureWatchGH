@@ -513,9 +513,7 @@ def main():
         try:
             with open(OUT_FILE) as f:
                 db = json.load(f)
-              if 'vendors' not in db:
-    db['vendors'] = {}
-            log(f'Loaded existing: {sum(len(v.get("cves",[])) for v in db["vendors"].values()):,} CVEs')
+        log(f'Loaded existing: {sum(len(v.get("cves",[])) for v in db["vendors"].values()):,} CVEs')
         except Exception:
             pass
 
