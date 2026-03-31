@@ -1,5 +1,3 @@
-python
-
 """
 SecureWatch CVE Sync — GitHub Actions version
 Fetches CVEs from NVD + vendor feeds + CISA KEV + CISA advisories + security news
