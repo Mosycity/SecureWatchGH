@@ -497,13 +497,9 @@ def fetch_cisa_kev():
         return {}
 
 def fetch_cisa_advisories():
-    """Fetch CISA advisories via cisagov/CSAF GitHub repo (IT=AA, OT=ICS)."""
-    import re as _re
-    YEAR      = str(datetime.utcnow().year)
-    PREV_YEAR = str(datetime.utcnow().year - 1)
-    cutoff    = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
-    advisories = []
-    seen_ids   = set()
+    """Temporary: disable broken CSAF advisories"""
+    log("  ⚠️ Skipping CISA advisories (CSAF broken / disabled)")
+    return []
 
     def parse_csaf(raw_bytes, adv_type):
         try:
