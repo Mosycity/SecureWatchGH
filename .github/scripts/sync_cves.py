@@ -497,106 +497,9 @@ def fetch_cisa_kev():
         return {}
 
 def fetch_cisa_advisories():
-    """Temporary: disable broken CSAF advisories"""
+    """Temporary: disable broken CSAF advisories."""
     log("  ⚠️ Skipping CISA advisories (CSAF broken / disabled)")
     return []
-
-    def parse_csaf(raw_bytes, adv_type):
-        try:
-            d     = json.loads(raw_bytes)
-            doc   = d.get('document', {})
-            track = doc.get('tracking', {})
-            adv_id   = track.get('id', '')
-            title    = doc.get('title', '')
-            pub_date = (track.get('current_release_date') or
-                        track.get('initial_release_date', ''))[:10]
-            if pub_date and pub_date < cutoff:
-                return None
-            cves_out = []
-            for vuln in d.get('vulnerabilities', []):
-                cve_id = vuln.get('cve', '').upper()
-                if not cve_id:
-                    ids = vuln.get('ids', [])
-                    cve_id = ids[0].get('text','').upper() if ids else ''
-                score, vector, severity = None, '', 'UNKNOWN'
-                for sc in vuln.get('scores', []):
-                    cv = sc.get('cvss_v3') or sc.get('cvss_v4') or {}
-                    if cv.get('base_score'):
-                        score    = float(cv['base_score'])
-                        vector   = cv.get('vector_string','')
-                        severity = ('CRITICAL' if score>=9 else 'HIGH' if score>=7
-                                    else 'MEDIUM' if score>=4 else 'LOW')
-                        break
-                action = ''
-                for rem in vuln.get('remediations', []):
-                    if rem.get('category') in ('vendor_fix','mitigation','workaround'):
-                        action = rem.get('details','')[:300]; break
-                if cve_id:
-                    cves_out.append({'cveID': cve_id, 'score': score,
-                                     'vector': vector, 'severity': severity,
-                                     'action': action})
-            products = []
-            for br in d.get('product_tree',{}).get('branches',[]):
-                vendor = br.get('name','')
-                for sub in br.get('branches',[]):
-                    p = sub.get('name','')
-                    if p: products.append((vendor + ' ' + p).strip())
-            link = ('https://www.cisa.gov/news-events/' +
-                    ('ics-advisories' if adv_type=='ics' else 'cybersecurity-advisories') +
-                    '/' + adv_id.lower())
-            for ref in doc.get('references',[]):
-                if ref.get('category')=='self' and 'cisa.gov' in ref.get('url',''):
-                    link = ref['url']; break
-            return {'id': adv_id, 'title': title, 'date': pub_date,
-                    'type': adv_type, 'link': link,
-                    'cves': cves_out,
-                    'products': list(set(products))[:8]}
-        except Exception:
-            return None
-
-    def fetch_dir(path, adv_type, label):
-        count = 0
-        for year in [YEAR, PREV_YEAR]:
-            try:
-                api_url = (CSAF_API_BASE + '/' + path + '/' + year)
-                raw     = http_get(api_url,
-                    headers={'Accept': 'application/vnd.github.v3+json',
-                             'User-Agent': 'SecureWatch/3.0'}, timeout=20)
-                files = sorted(json.loads(raw),
-                               key=lambda f: f.get('name',''), reverse=True)
-                batch = 0
-                for f in files:
-                    if not f.get('name','').endswith('.json'): continue
-                    try:
-                        raw_json = http_get(
-                            CSAF_RAW_BASE + '/' + path + '/' + year + '/' + f['name'],
-                            timeout=15)
-                        adv = parse_csaf(raw_json, adv_type)
-                        if adv and adv['id'] not in seen_ids:
-                            seen_ids.add(adv['id'])
-                            advisories.append(adv)
-                            count += 1
-                            batch += 1
-                    except Exception:
-                        pass
-                    if batch >= 40: break
-            except Exception as e:
-                log('  WARNING CSAF ' + label + ' ' + year + ': ' + str(e))
-        return count
-
-    log('')
-    log('── CISA CSAF Advisories ────────────────────────────────')
-    it_count  = fetch_dir('IT/white', 'aa',  'IT/AA')
-    ics_count = fetch_dir('OT/white', 'ics', 'OT/ICS')
-    advisories.sort(key=lambda a: a['date'], reverse=True)
-    total_cves = sum(len(a['cves']) for a in advisories)
-    crit_count = sum(1 for a in advisories
-                     if any(c['score'] and c['score'] >= 9.0 for c in a['cves']))
-    log('  ✅ AA advisories : ' + str(it_count))
-    log('  ✅ ICS advisories: ' + str(ics_count))
-    log('  Total CVE refs  : ' + str(total_cves))
-    log('  Critical 9.0+   : ' + str(crit_count))
-    return advisories
 
 
 def merge_advisories(nvd_cves, advisories, vendor_id):
@@ -932,12 +835,11 @@ def main():
     db['cisa'] = cisa_data
     if db['cisa'].get('kev'):
         enrich_cves_with_kev(db, db['cisa']['kev'])
-    with open(OUT_FILE, 'w') as f:
-        json.dump(db, f, separators=(',', ':'))
 
     # ── Step 4: Security news ─────────────────────────────────
     news_items = fetch_all_news()
     db['news'] = {'lastFetch': datetime.utcnow().isoformat()+'Z', 'items': news_items}
+    db['lastSync'] = datetime.utcnow().isoformat() + 'Z'
     with open(OUT_FILE, 'w') as f:
         json.dump(db, f, separators=(',', ':'))
 
