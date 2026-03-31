@@ -599,6 +599,7 @@ def main():
             log(f'Loaded existing: {sum(len(v.get("cves",[])) for v in db["vendors"].values()):,} CVEs')
         except Exception:
             pass
+    db.setdefault('vendors', {})   # ← add this line
 
     # ── Step 1: Vendor RSS/API feeds ─────────────────────────
     log('')
