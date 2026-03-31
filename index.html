@@ -2136,6 +2136,7 @@ async function loadVendor(vendor,force=false){
           {signal: abortCtrls[vendor.id].signal});
         if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`);
         window._ghCache = await r.json();
+        renderCisaKev();
       }
       const db = window._ghCache;
       if (!db.vendors?.[vendor.id]) throw new Error('Vendor not in cache yet — sync may still be running');
@@ -4348,7 +4349,8 @@ function renderCisaAdvisories(adv, envCveIds, kev, cisaMap) {
 
 function renderCisaKev() {
   const db = window._ghCache;
-  if (!db?.cisa?.kev) return;
+  console.log("CISA DATA:", window._ghCache.cisa);
+  if (!window._ghCache?.cisa?.kev) {   console.log("CISA not ready");   return; }
   const kev    = db.cisa.kev;
   const kevArr = Object.values(kev);
   const search = (document.getElementById('cisaSearch')?.value||'').toLowerCase();
