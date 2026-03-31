@@ -1687,6 +1687,12 @@ let kevSet=new Set(),kevLoaded=false;
 async function loadKEV(){
   if(kevLoaded)return;
   try{
+    if(window._ghCache?.cisa?.kev){
+      Object.keys(window._ghCache.cisa.kev).forEach(id=>kevSet.add(id));
+      kevLoaded=true;
+      if(Object.keys(vendorData).length) reRenderAll();
+      return;
+    }
     const r = await fetch(CISA_KEV_URL);
     if(!r.ok) return;
     const j = await r.json();
