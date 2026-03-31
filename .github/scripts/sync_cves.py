@@ -916,10 +916,6 @@ def main():
         if nvd_cves: success += 1
         else:        failed  += 1
 
-        # Save after every vendor — progress not lost on timeout
-        db['lastSync'] = datetime.utcnow().isoformat() + 'Z'
-        with open(OUT_FILE, 'w') as f:
-            json.dump(db, f, separators=(',', ':'))
 
         if i < len(VENDORS) - 1:
             time.sleep(THROTTLE)
