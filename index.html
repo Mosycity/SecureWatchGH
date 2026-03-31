@@ -4309,7 +4309,7 @@ function renderCisaAdvisories(adv, envCveIds, kev, cisaMap) {
     return;
   }
 
-  const aa  = adv.filter(a => a.type === 'aa');
+  const aa  = adv.filter(a => a.type === 'aa' || !a.type);
   const ics = adv.filter(a => a.type === 'ics');
 
   const renderGroup = (items, label) => {
