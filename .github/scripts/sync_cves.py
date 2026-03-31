@@ -465,6 +465,7 @@ def fetch_msrc_feed(feed):
 # ─────────────────────────────────────────────────────────────
 CISA_KEV_URL       = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
 CISA_ADVISORY_URL  = 'https://www.cisa.gov/cybersecurity-advisories/all.xml'
+CSAF_API_BASE = "https://api.github.com/repos/cisagov/csaf/contents"
 
 def fetch_cisa_kev():
     """Fetch CISA Known Exploited Vulnerabilities catalog.
