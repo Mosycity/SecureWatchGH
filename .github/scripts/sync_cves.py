@@ -451,10 +451,19 @@ def fetch_cisa_advisories():
                         action = rem.get('details','')[:300]; break
                 if cve_id:
                     cves_out.append({'cveID':cve_id,'score':score,'vector':vector,'severity':severity,'action':action})
-            link = f"https://www.cisa.gov/news-events/{'ics-advisories' if adv_type=='ics' else 'cybersecurity-advisories'}/{adv_id.lower()}"
-            for ref in doc.get('references',[]):
-                if ref.get('category')=='self' and 'cisa.gov' in ref.get('url',''):
-                    link = ref['url']; break
+            link = None
+            for ref in doc.get('references', []):
+                url = ref.get('url', '')
+                if 'cisa.gov' in url and ref.get('category') in ('self', 'external'):
+                    link = url
+                    break
+            if not link:
+                slug = adv_id.lower()
+                if slug.startswith(('aa', 'icsa-', 'icsma-', 'ir-')):
+                    path = 'ics-advisories' if adv_type == 'ics' else 'cybersecurity-advisories'
+                    link = f"https://www.cisa.gov/news-events/{path}/{slug}"
+                else:
+                    link = f"https://www.cisa.gov/search?g={adv_id}"
             return {'id':adv_id,'title':title,'date':pub_date,'type':adv_type,'link':link,'cves':cves_out,'products':list(set(products))[:6]}
         except Exception:
             return None
