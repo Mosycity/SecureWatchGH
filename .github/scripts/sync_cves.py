@@ -151,7 +151,7 @@ def nvd_fetch(params):
         **(({'apiKey': NVD_KEY}) if NVD_KEY else {})
     })
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             return json.loads(r.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         if e.code == 429: raise Exception('RATE_LIMITED')
